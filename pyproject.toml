@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pie_g"
+version = "1.0.0"
+authors = []
+description = "PIE-G"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "torch",
+    "numpy>=1.19.2",
+    "imageio>=2.9.0",
+    "tensordict",
+    "segdac"
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pie_g/"]
