@@ -215,6 +215,7 @@ class PIEGAgent(StochasticAgent):
         places365_data_dir_path,
         env_action_scaler,
     ):
+        super().__init__(env_action_scaler=env_action_scaler)
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.update_every_steps = update_every_steps
@@ -226,12 +227,10 @@ class PIEGAgent(StochasticAgent):
         self.places365_data_dir_path = places365_data_dir_path
 
         # models
-        encoder = ResEncoder(obs_shape, device=device).to(device)
-        actor = Actor(encoder.repr_dim, action_dim, feature_dim, hidden_dim).to(device)
-        super().__init__(actor=actor, env_action_scaler=env_action_scaler)
-
-        self.encoder = encoder
-
+        self.encoder = ResEncoder(obs_shape, device=device).to(device)
+        self.actor = Actor(
+            self.encoder.repr_dim, action_dim, feature_dim, hidden_dim
+        ).to(device)
         self.critic = Critic(
             self.encoder.repr_dim, action_dim, feature_dim, hidden_dim
         ).to(device)
@@ -278,11 +277,13 @@ class PIEGAgent(StochasticAgent):
         reward = train_data["next"]["reward"]
         discount = self.discount
         next_obs = train_data["next"]["pixels_transformed"]
+        done = train_data["next"]["done"]
+        not_done = 1 - done.float()
 
-        metrics = dict()
+        logs = dict()
 
         if env_step % self.update_every_steps != 0:
-            return metrics
+            return logs
 
         # augment
         obs = self.aug(obs.float())
@@ -302,26 +303,29 @@ class PIEGAgent(StochasticAgent):
             next_obs = self.encoder(next_obs)
 
         # update critic
-        metrics.update(
+        logs.update(
             self.update_critic(
-                obs, action, reward, discount, next_obs, env_step, aug_obs
+                obs, action, reward, discount, not_done, next_obs, env_step, aug_obs
             )
         )
 
         # update actor
-        metrics.update(self.update_actor(obs.detach(), env_step))
+        logs.update(self.update_actor(obs.detach(), env_step))
 
         # update critic target
         utils.soft_update_params(
             self.critic, self.critic_target, self.critic_target_tau
         )
 
-        return metrics
+        return logs
 
-    def update_critic(self, obs, action, reward, discount, next_obs, step, aug_obs):
-        metrics = dict()
+    def update_critic(
+        self, obs, action, reward, discount, not_done, next_obs, step, aug_obs
+    ):
+        logs = dict()
         self.actor.eval()
         self.critic_target.eval()
+        self.critic.train()
 
         with torch.no_grad():
             stddev = utils.schedule(self.stddev_schedule, step)
@@ -329,7 +333,7 @@ class PIEGAgent(StochasticAgent):
             next_action = dist.sample(clip=self.stddev_clip)
             target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
             target_V = torch.min(target_Q1, target_Q2)
-            target_Q = reward + (discount * target_V)
+            target_Q = reward + not_done * (discount * target_V)
 
         Q1, Q2 = self.critic(obs, action)
         critic_loss = F.mse_loss(Q1, target_Q) + F.mse_loss(Q2, target_Q)
@@ -339,10 +343,10 @@ class PIEGAgent(StochasticAgent):
 
         critic_loss = 0.5 * (critic_loss + aug_loss)
 
-        metrics["critic_target_q"] = target_Q.mean().item()
-        metrics["critic_q1"] = Q1.mean().item()
-        metrics["critic_q2"] = Q2.mean().item()
-        metrics["critic_loss_mean"] = critic_loss.item()
+        logs["critic_target_q"] = target_Q.mean().item()
+        logs["critic_q1"] = Q1.mean().item()
+        logs["critic_q2"] = Q2.mean().item()
+        logs["critic_loss"] = critic_loss.item()
 
         # optimize encoder and critic
         self.encoder_opt.zero_grad(set_to_none=True)
@@ -351,10 +355,12 @@ class PIEGAgent(StochasticAgent):
         self.critic_opt.step()
         self.encoder_opt.step()
 
-        return metrics
+        return logs
 
     def update_actor(self, obs, step):
-        metrics = dict()
+        logs = dict()
+        self.critic.eval()
+        self.actor.train()
 
         stddev = utils.schedule(self.stddev_schedule, step)
         dist = self.actor(obs, stddev)
@@ -369,6 +375,6 @@ class PIEGAgent(StochasticAgent):
         actor_loss.backward()
         self.actor_opt.step()
 
-        metrics["actor_loss"] = actor_loss.item()
+        logs["actor_loss"] = actor_loss.item()
 
-        return metrics
+        return logs

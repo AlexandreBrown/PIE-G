@@ -9,13 +9,7 @@ authors = []
 description = "PIE-G"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = [
-    "torch",
-    "numpy>=1.19.2",
-    "imageio>=2.9.0",
-    "tensordict",
-    "segdac"
-]
+dependencies = ["torch", "numpy", "imageio", "tensordict", "segdac"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pie_g/"]
